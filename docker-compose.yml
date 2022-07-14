@@ -1,0 +1,103 @@
+version: "3.9"
+
+services:
+  mysql:
+    container_name: mysql
+    image: mysql:8.0
+    ports:
+      - 3306:3306
+    environment:
+      - MYSQL_ROOT_PASSWORD=debezium
+      - MYSQL_USER=mysqluser
+      - MYSQL_PASSWORD=mysqlpw
+    volumes:
+      - ./conf/mysql/mysql.cnf:/etc/mysql/conf.d/mysql.cnf # 需要提前设置文件权限为644，否则启动时配置文件会被跳过
+      - ./conf/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/mysql:/var/lib/mysql
+    # command: bash -c "chmod 644 /etc/mysql/conf.d/mysql.cnf && /usr/local/bin/docker-entrypoint.sh"
+  zookeeper:
+    container_name: zookeeper
+    image: debezium/zookeeper:2.0
+    ports:
+      - 2181:2181
+      - 2888:2888
+      - 3888:3888
+  kafka:
+    container_name: kafka
+    image: debezium/kafka:2.0
+    ports:
+      - 9092:9092
+    links:
+      - zookeeper
+    environment:
+      - ZOOKEEPER_CONNECT=zookeeper:2181
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    restart: "no"
+    ports:
+      - 8081:9000
+    environment:
+      KAFKA_BROKERCONNECT: kafka:9092
+      JVM_OPTS: "-Xms16M -Xmx48M -Xss180K -XX:-TieredCompilation -XX:+UseStringDeduplication -noverify"
+    depends_on:
+      - kafka
+  debezium:
+    container_name: debezium
+    image: debezium/connect:2.0
+    environment:
+      - BOOTSTRAP_SERVERS=kafka:9092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=my_connect_configs
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+      - STATUS_STORAGE_TOPIC=my_connect_statuses
+    ports:
+      - 8083:8083
+    depends_on:
+      - mysql
+      - kafka
+  debezium-ui:
+    container_name: debezium-ui
+    image: debezium/debezium-ui:2.0
+    restart: always
+    environment:
+      - KAFKA_CONNECT_URIS=http://debezium:8083
+    ports:
+      - 8080:8080
+    depends_on:
+      - kafka
+      - debezium
+  # fe: 
+  # web ui: user:root 密码为空
+  # sh>mysql -h doris -P 9030 -u root
+  # mysql> ALTER SYSTEM ADD BACKEND "localhost:9050";
+  doris:
+    container_name: doris
+    image: 76527413/doris:master
+    ports:
+      # fe 
+      - 8030:8030
+      - 9010:9010
+      - 9020:9020
+      - 9030:9030
+      # be
+      - 8040:8040
+      - 8060:8060
+      - 9050:9050
+      - 9060:9060
+    volumes:
+      # fe
+      - ./log/doris/fe:/doris/fe/log
+      - ./data/doris/fe/doris-meta:/doris/fe/doris-meta
+      # be
+      - ./log/doris/be/:/doris/be/log
+      - ./data/doris/be/storage:/doris/be/storage
+
+  superset:
+    image: apache/superset:1.5.1
+    ports:
+      - 8088:8088
+    volumes:
+      - ./conf/superset/superset_config.py:/app/pythonpath/superset_config.py
+      - ./conf/superset/start.sh:/start.sh
+      - ./data/superset:/app/superset_home
+    command: bash -c "/start.sh"
